@@ -81,15 +81,13 @@ def scalable_network_setup(node_names, ccon_list, qcon_list, node_distance=4e-3,
 
     return network
 
-def example_sim_setup(node_A, node_B):
+def example_sim_setup(network):
     """Example simulation setup with data collector for teleportation protocol.
 
     Parameters
     ----------
-    node_A : :class:`~netsquid.nodes.node.Node`
-        Node corresponding to Alice.
-    node_B : :class:`~netsquid.nodes.node.Node`
-        Node corresponding to Bob.
+    network : :class: `~netsquid.nodes.network.Network`
+        Network containing nodes Alice and Bob
 
     Returns
     -------
@@ -102,6 +100,9 @@ def example_sim_setup(node_A, node_B):
 
     """
 
+    node_A = network.get_node("Alice")
+    node_B = network.get_node("Bob")
+    
     def collect_fidelity_data(evexpr):
         protocol = evexpr.triggered_events[-1].source
         mem_pos = protocol.get_signal_result(Signals.SUCCESS)
@@ -144,14 +145,13 @@ def run_experiment(num_runs, depolar_rates, distance=4e-3, dephase_rate=0.0):
         qcon_list = [("Alice", "Bob")]
         network = scalable_network_setup(node_list, ccon_list, qcon_list, distance, depolar_rate, dephase_rate)
         #network = example_network_setup(distance, depolar_rate, dephase_rate)
-        node_a = network.get_node("Alice")
-        node_b = network.get_node("Bob")
-        protocol_alice, protocol_bob, dc = example_sim_setup(node_a, node_b)
+        protocol_alice, protocol_bob, dc = example_sim_setup(network)
         protocol_alice.start()
         protocol_bob.start()
+        node_a = network.get_node("Alice")
+        node_b = network.get_node("Bob")
         q_conn = network.get_connection(node_a, node_b, label="quantum")
-        cycle_runtime = (q_conn.subcomponents["qsource"].subcomponents["internal_clock"]
-                         .models["timing_model"].delay)
+        cycle_runtime = (q_conn.subcomponents["qsource"].subcomponents["internal_clock"].models["timing_model"].delay)
         ns.sim_run(cycle_runtime * num_runs + 1)
         df = dc.dataframe
         df['depolar_rate'] = depolar_rate
