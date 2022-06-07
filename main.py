@@ -57,17 +57,17 @@ def scalable_network_setup(node_names, ccon_list, qcon_list, node_distance=4e-3,
     '''
     # Setup nodes Alice and Bob with quantum processor:
     list_nodes = [Node(name, qmemory=create_processor(depolar_rate, dephase_rate)) for name in node_names]
-    
+
     # Create a network
     network = Network("Teleportation_network")
     network.add_nodes(list_nodes)
-    
+
     # Setup classical connection between nodes:
     c_conn = ClassicalConnection(length=node_distance)
     for connection in ccon_list:
         network.add_connection(network.get_node(connection[0]), network.get_node(connection[1]), connection=c_conn, label="classical",
                            port_name_node1="cout_bob", port_name_node2="cin_alice")
-    
+
     # Setup entangling connection between nodes:
     source_frequency = 4e4 / node_distance
     q_conn = EntanglingConnection(length=node_distance, source_frequency=source_frequency)
@@ -81,13 +81,15 @@ def scalable_network_setup(node_names, ccon_list, qcon_list, node_distance=4e-3,
 
     return network
 
-def example_sim_setup(network):
+def example_sim_setup(node_A, node_B):
     """Example simulation setup with data collector for teleportation protocol.
 
     Parameters
     ----------
-    network : :class: `~netsquid.nodes.network.Network`
-        Network containing nodes Alice and Bob
+    node_A : :class:`~netsquid.nodes.node.Node`
+        Node corresponding to Alice.
+    node_B : :class:`~netsquid.nodes.node.Node`
+        Node corresponding to Bob.
 
     Returns
     -------
@@ -100,14 +102,12 @@ def example_sim_setup(network):
 
     """
 
-    node_A = network.get_node("Alice")
-    node_B = network.get_node("Bob")
-    
     def collect_fidelity_data(evexpr):
         protocol = evexpr.triggered_events[-1].source
         mem_pos = protocol.get_signal_result(Signals.SUCCESS)
         qubit, = protocol.node.qmemory.pop(mem_pos)
-        fidelity = qapi.fidelity(qubit, ns.y0, squared=True)
+        #fidelity = qapi.fidelity(qubit, ns.y0, squared=True)
+        fidelity = qapi.fidelity(qubit, ns.s1, squared=True)
         qapi.discard(qubit)
         return {"fidelity": fidelity}
 
@@ -140,18 +140,15 @@ def run_experiment(num_runs, depolar_rates, distance=4e-3, dephase_rate=0.0):
     fidelity_data = pandas.DataFrame()
     for i, depolar_rate in enumerate(depolar_rates):
         ns.sim_reset()
-        node_list = ["Alice", "Bob"]
-        ccon_list = [("Alice", "Bob")]
-        qcon_list = [("Alice", "Bob")]
-        network = scalable_network_setup(node_list, ccon_list, qcon_list, distance, depolar_rate, dephase_rate)
-        #network = example_network_setup(distance, depolar_rate, dephase_rate)
-        protocol_alice, protocol_bob, dc = example_sim_setup(network)
-        protocol_alice.start()
-        protocol_bob.start()
+        network = example_network_setup(distance, depolar_rate, dephase_rate)
         node_a = network.get_node("Alice")
         node_b = network.get_node("Bob")
+        protocol_alice, protocol_bob, dc = example_sim_setup(node_a, node_b)
+        protocol_alice.start()
+        protocol_bob.start()
         q_conn = network.get_connection(node_a, node_b, label="quantum")
-        cycle_runtime = (q_conn.subcomponents["qsource"].subcomponents["internal_clock"].models["timing_model"].delay)
+        cycle_runtime = (q_conn.subcomponents["qsource"].subcomponents["internal_clock"]
+                         .models["timing_model"].delay)
         ns.sim_run(cycle_runtime * num_runs + 1)
         df = dc.dataframe
         df['depolar_rate'] = depolar_rate

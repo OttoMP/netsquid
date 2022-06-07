@@ -102,3 +102,110 @@ class ClassicalConnection(Connection):
                                                models={"delay_model": FibreDelayModel()}),
                               forward_input=[("A", "send")],
                               forward_output=[("B", "recv")])
+
+from netsquid.components.qdetector import QuantumDetector
+from netsquid.examples.simple_link import create_meas_ops
+from netsquid.components.component import Message
+
+class BSMDetector(QuantumDetector):
+    """A component that performs Bell basis measurements.
+
+    Measure two incoming qubits in the Bell basis if they
+    arrive within the specified measurement delay.
+    Only informs the connections that send a qubit of the measurement result.
+
+    """
+
+    def __init__(self, name, system_delay=0., dead_time=0., models=None,
+                 output_meta=None, error_on_fail=False, properties=None):
+        super().__init__(name, num_input_ports=2, num_output_ports=2,
+                         meas_operators=create_meas_ops(),
+                         system_delay=system_delay, dead_time=dead_time,
+                         models=models, output_meta=output_meta,
+                         error_on_fail=error_on_fail, properties=properties)
+        self._sender_ids = []
+
+    def preprocess_inputs(self):
+        """Preprocess and capture the qubit metadata
+
+        """
+        super().preprocess_inputs()
+        for port_name, qubit_list in self._qubits_per_port.items():
+            if len(qubit_list) > 0:
+                self._sender_ids.append(port_name[3:])
+
+    def inform(self, port_outcomes):
+        """Inform the MHP of the measurement result.
+
+        We only send a result to the node that send a qubit.
+        If the result is empty we change the result and header.
+
+        Parameters
+        ----------
+        port_outcomes : dict
+            A dictionary with the port names as keys
+            and the post-processed measurement outcomes as values
+
+        """
+        for port_name, outcomes in port_outcomes.items():
+            if len(outcomes) == 0:
+                outcomes = ['TIMEOUT']
+                header = 'error'
+            else:
+                header = 'photonoutcome'
+            # Extract the ids from the port names (cout...)
+            if port_name[4:] in self._sender_ids:
+                msg = Message(outcomes, header=header, **self._meta)
+                self.ports[port_name].tx_output(msg)
+
+    def finish(self):
+        """Clear sender ids after the measurement has finished."""
+        super().finish()
+        self._sender_ids.clear()
+
+class HeraldedConnection(Connection):
+    """A connection that takes in two qubits, and returns a message
+    how they were measured at a detector.
+
+    Either no clicks, a single click or double click, or an error
+    when the qubits didn't arrive within the time window.
+
+    Parameters
+    ----------
+    name : str
+        The name of this connection
+    length_to_a : float
+        The length in km between the detector and side A. We assume a speed of 200000 km/s
+    length_to_b : float
+        The length in km between the detector and side B. We assume a speed of 200000 km/s
+    time_window : float, optional
+        The interval where qubits are still able to be measured correctly.
+        Must be positive. Default is 0.
+
+    """
+
+    def __init__(self, name, length_to_a, length_to_b, time_window=0):
+        super().__init__(name)
+        delay_a = length_to_a / 200000 * 1e9
+        delay_b = length_to_b / 200000 * 1e9
+        channel_a = ClassicalChannel("ChannelA", delay=delay_a)
+        channel_b = ClassicalChannel("ChannelB", delay=delay_b)
+        qchannel_a = QuantumChannel("QChannelA", delay=delay_a)
+        qchannel_b = QuantumChannel("QChannelB", delay=delay_b)
+        # Add all channels as subcomponents
+        self.add_subcomponent(channel_a)
+        self.add_subcomponent(channel_b)
+        self.add_subcomponent(qchannel_a)
+        self.add_subcomponent(qchannel_b)
+        # Add midpoint detector
+        detector = BSMDetector("Midpoint", system_delay=time_window)
+        self.add_subcomponent(detector)
+        # Connect the ports
+        self.ports['A'].forward_input(qchannel_a.ports['send'])
+        self.ports['B'].forward_input(qchannel_b.ports['send'])
+        qchannel_a.ports['recv'].connect(detector.ports['qin0'])
+        qchannel_b.ports['recv'].connect(detector.ports['qin1'])
+        channel_a.ports['send'].connect(detector.ports['cout0'])
+        channel_b.ports['send'].connect(detector.ports['cout1'])
+        channel_a.ports['recv'].forward_output(self.ports['A'])
+        channel_b.ports['recv'].forward_output(self.ports['B'])
